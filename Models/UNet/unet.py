@@ -25,7 +25,7 @@ TARGET_SHAPE = (128, 128, 128)
 
 BATCH_SIZE = 4
 NUM_WORKERS = 2
-LEARNING_RATE = 1e-5
+LEARNING_RATE = 5e-4
 NUM_EPOCHS = 100
 
 
@@ -53,20 +53,25 @@ class BratsT1Dataset(Dataset):
         pairs = []
         for t in t1_files:
             folder = t.parent
-            segs = [p for p in folder.glob("*") if
-                    p.is_file() and ('seg' in p.name.lower()) and (p.suffix in ['.nii', '.gz'])]
+            tokens = t.name.split('-')
+            prefix = '-'.join(tokens[:4]) if len(tokens) >= 4 else tokens[0]
+
+            segs = [p for p in folder.iterdir()
+                    if p.is_file()
+                    and 'seg' in p.name.lower()
+                    and prefix in p.name
+                    and (p.name.endswith('.nii') or p.name.endswith('.nii.gz'))]
+
             if segs:
                 pairs.append((str(t), str(segs[0])))
                 continue
 
         self.pairs = pairs
         if len(self.pairs) == 0:
-            raise RuntimeError(f"No T1 - seg pairs were found under {root_dir}.")
-
+            raise RuntimeError(f"No T1+seg pairs found under {root_dir}. Check naming conventions.")
         self.augment = augment
         transforms = []
         transforms.append(tio.Resize(target_shape))
-
         if augment:
             transforms.append(tio.RandomFlip(axes=(0, 1, 2), p=0.5))
             transforms.append(tio.RandomAffine(scales=(0.9, 1.1), degrees=10, translation=5))
@@ -82,11 +87,10 @@ class BratsT1Dataset(Dataset):
         seg_arr = load_nifty(seg_path)
         seg_bin = (seg_arr > 0).astype(np.uint8)
         img_arr = zscore_normalize(img_arr, mask=seg_bin)
-
         subj = tio.Subject(
             img=tio.ScalarImage(tensor=img_arr[np.newaxis, ...]),
-            seg=tio.LabelMap(tensor=seg_bin[np.newaxis, ...].astype(np.uint8)))
-
+            seg=tio.LabelMap(tensor=seg_bin[np.newaxis, ...].astype(np.uint8))
+        )
         subj = self.transform(subj)
         img_t = subj['img'].data.clone().float()
         seg_t = subj['seg'].data.clone().float()
@@ -225,25 +229,34 @@ def hd95_score(pred, target):
         return 999.0
 
 
-class FocalDiceLoss(nn.Module):
-    def __init__(self, alpha=0.25, gamma=2.0, eps=1e-6):
+class CombinedLoss(nn.Module):
+    def __init__(self, alpha_dice=1.0, alpha_focal=1.0, alpha_ce=0.5, gamma=2.0, eps=1e-6):
         super().__init__()
-        self.alpha = alpha
+        self.alpha_dice = alpha_dice
+        self.alpha_focal = alpha_focal
+        self.alpha_ce = alpha_ce
         self.gamma = gamma
         self.eps = eps
 
     def forward(self, logits, target):
         pred = torch.sigmoid(logits)
+
+        intersection = (pred * target).sum(dim=[1, 2, 3, 4])
+        union = pred.sum(dim=[1, 2, 3, 4]) + target.sum(dim=[1, 2, 3, 4])
+        dice_loss = 1 - (2. * intersection + self.eps) / (union + self.eps)
+        dice_loss = dice_loss.mean()
+
+        pos_weight = target.sum() / target.numel()
+        weight = (1.0 - pos_weight) / pos_weight
+        ce_loss = F.binary_cross_entropy_with_logits(logits, target,
+                                                     pos_weight=torch.tensor([weight], device=logits.device))
+
         bce = F.binary_cross_entropy_with_logits(logits, target, reduction='none')
         pt = torch.where(target == 1, pred, 1 - pred)
-        focal_weight = (self.alpha * (1 - pt) ** self.gamma)
+        focal_weight = (0.25 * (1 - pt) ** self.gamma)
         focal_loss = (focal_weight * bce).mean()
 
-        intersection = (pred * target).sum()
-        dice = (2. * intersection + self.eps) / (pred.sum() + target.sum() + self.eps)
-        dice_loss = 1 - dice
-
-        return focal_loss + dice_loss
+        return self.alpha_dice * dice_loss + self.alpha_focal * focal_loss + self.alpha_ce * ce_loss
 
 
 def plot_metrics(train_metrics, val_metrics, save_dir):
@@ -254,8 +267,8 @@ def plot_metrics(train_metrics, val_metrics, save_dir):
 
     for metric_name in metric_names:
         if not val_metrics[metric_name] or not train_metrics[metric_name]:
-            print(f"Missing data for metric: {metric_name.upper()}.")
             continue
+
         plt.figure(figsize=(10, 6))
 
         plt.plot(epochs, train_metrics[metric_name],
@@ -270,7 +283,7 @@ def plot_metrics(train_metrics, val_metrics, save_dir):
         plt.xlabel('Epoch', fontsize=12)
 
         if metric_name == 'hd95':
-            plt.ylabel('HD95 Distance (lower = better)', fontsize=12)
+            plt.ylabel('HD95 Distance (Lower is better)', fontsize=12)
         else:
             plt.ylabel(f'{metric_name.upper()} Score', fontsize=12)
 
@@ -304,34 +317,23 @@ def main_train():
     test_ds = BratsT1Dataset(TEST_DIR, target_shape=TARGET_SHAPE, augment=False)
     print("Dataset sizes: Train:", len(train_ds), "Val:", len(val_ds), "Test:", len(test_ds))
 
-    train_weights = []
-    for i in range(len(train_ds)):
-        _, seg = train_ds[i]
-        tumor_ratio = seg.sum().item() / seg.numel()
-        weight = 1.0 + tumor_ratio * 10
-        train_weights.append(weight)
-
-    train_sampler = torch.utils.data.WeightedRandomSampler(
-        weights=train_weights,
-        num_samples=len(train_weights),
-        replacement=True
-    )
-
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, sampler=train_sampler, num_workers=NUM_WORKERS,
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS,
                               pin_memory=True)
-    val_loader = DataLoader(val_ds, batch_size=2, shuffle=False, num_workers=NUM_WORKERS)
-    test_loader = DataLoader(test_ds, batch_size=2, shuffle=False, num_workers=NUM_WORKERS)
+
+    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
+    test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
 
     img_t, seg_t = train_ds[0]
     print("Sample shapes (img, seg):", img_t.shape, seg_t.shape, "dtype:", img_t.dtype, seg_t.dtype)
     print(f"Image stats - min: {img_t.min():.3f}, max: {img_t.max():.3f}, mean: {img_t.mean():.3f}")
     print(f"Seg unique values: {torch.unique(seg_t)}")
-    print(f"Seg positive pixels: {seg_t.sum().item()} / {seg_t.numel()} ({100 * seg_t.sum().item() / seg_t.numel():.2f}%)")
+    print(
+        f"Seg positive pixels: {seg_t.sum().item()} / {seg_t.numel()} ({100 * seg_t.sum().item() / seg_t.numel():.2f}%)")
 
     model = UNet3D(in_channels=1, out_channels=1, fmaps=(32, 64, 128, 256, 512), dropout=0.2).to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
+    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', patience=10, factor=0.5)
-    criterion = FocalDiceLoss(alpha=0.5, gamma=2.0)
+    criterion = CombinedLoss(alpha_dice=3.0, alpha_focal=1.0, alpha_ce=0.1).to(device)
 
     sample_img, sample_seg = next(iter(train_loader))
     sample_img = sample_img.to(device)
@@ -347,10 +349,11 @@ def main_train():
     best_model_path = os.path.join(model_dir, "best_model.pth")
     last_model_path = os.path.join(model_dir, "last_model.pth")
     patience_counter = 0
-    early_stop_patience = 20
+    early_stop_patience = 30
 
     for epoch in range(NUM_EPOCHS):
         model.train()
+
         train_dice, train_iou, train_prec, train_rec, train_f1, train_hd95 = [], [], [], [], [], []
 
         for imgs, segs in train_loader:
@@ -424,7 +427,7 @@ def main_train():
         if val_metrics['dice'][-1] > best_val_dice:
             best_val_dice = val_metrics['dice'][-1]
             torch.save(model.state_dict(), best_model_path)
-            print(f"\nBest model updated with Val Dice={best_val_dice:.4f}")
+            print(f"\n Best model updated with Val Dice={best_val_dice:.4f}")
             patience_counter = 0
         else:
             patience_counter += 1
@@ -544,12 +547,13 @@ def test_model(model_path, test_loader, device, save_dir):
     plt.close()
     return metrics
 
+
 if __name__ == '__main__':
     main_train()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     test_ds = BratsT1Dataset(TEST_DIR, target_shape=TARGET_SHAPE, augment=False)
-    test_loader = DataLoader(test_ds, batch_size=2, shuffle=False, num_workers=NUM_WORKERS)
+    test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
 
     best_model_path = os.path.join(model_dir, "best_model.pth")
     if os.path.exists(best_model_path):

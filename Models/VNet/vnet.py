@@ -14,6 +14,7 @@ import re
 import torch.optim as optim
 from scipy import ndimage
 
+
 DATA_ROOT = "#"
 TRAIN_DIR = os.path.join(DATA_ROOT, "Train")
 VAL_DIR = os.path.join(DATA_ROOT, "Validation")
@@ -21,11 +22,12 @@ TEST_DIR = os.path.join(DATA_ROOT, "Test")
 PLOTS_DIR = "#"
 model_dir = "#"
 
+
 TARGET_SHAPE = (128, 128, 128)
 
 BATCH_SIZE = 4
 NUM_WORKERS = 2
-LEARNING_RATE = 1e-5
+LEARNING_RATE = 1e-4
 NUM_EPOCHS = 100
 
 
@@ -53,15 +55,22 @@ class BratsT1Dataset(Dataset):
         pairs = []
         for t in t1_files:
             folder = t.parent
-            segs = [p for p in folder.glob("*") if
-                    p.is_file() and ('seg' in p.name.lower()) and (p.suffix in ['.nii', '.gz'])]
+            tokens = t.name.split('-')
+            prefix = '-'.join(tokens[:4]) if len(tokens) >= 4 else tokens[0]
+
+            segs = [p for p in folder.iterdir()
+                    if p.is_file()
+                    and 'seg' in p.name.lower()
+                    and prefix in p.name
+                    and (p.name.endswith('.nii') or p.name.endswith('.nii.gz'))]
+
             if segs:
                 pairs.append((str(t), str(segs[0])))
                 continue
 
         self.pairs = pairs
         if len(self.pairs) == 0:
-            raise RuntimeError(f"No T1 - seg pairs were not found {root_dir}.")
+            raise RuntimeError(f"No T1+seg pairs found under {root_dir}. Check naming conventions.")
         self.augment = augment
         transforms = []
         transforms.append(tio.Resize(target_shape))
@@ -89,7 +98,6 @@ class BratsT1Dataset(Dataset):
         seg_t = subj['seg'].data.clone().float()
         seg_t = (seg_t > 0.5).float()
         return img_t, seg_t
-
 
 class ResidualConvBlock(nn.Module):
     def __init__(self, in_ch, out_ch, num_convs=2):
