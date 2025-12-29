@@ -1,0 +1,8 @@
+Image,Mask
+/hdd3/bran/data/SD_glioma/submitted_data/MOTUM-v.2.2/010-BreastMeta-ASLY/t1ce.nii.gz,/hdd3/bran/data/SD_glioma/submitted_data/MOTUM-v.2.2/010-BreastMeta-ASLY/t1ce_seg_label2.nii.gz
+Image,Mask
+/hdd3/bran/data/SD_glioma/submitted_data/MOTUM-v.2.2/010-BreastMeta-ASLY/t2.nii.gz,/hdd3/bran/data/SD_glioma/submitted_data/MOTUM-v.2.2/010-BreastMeta-ASLY/flair_seg_label1.nii.gz
+Image,Mask
+/hdd3/bran/data/SD_glioma/submitted_data/MOTUM-v.2.2/010-BreastMeta-ASLY/t1ce.nii.gz,/hdd3/bran/data/SD_glioma/submitted_data/MOTUM-v.2.2/010-BreastMeta-ASLY/t1ce_seg_label2.nii.gz
+Image,Mask
+/hdd3/bran/data/SD_glioma/submitted_data/MOTUM-v.2.2/010-BreastMeta-ASLY/t1ce.nii.gz,/hdd3/bran/data/SD_glioma/submitted_data/MOTUM-v.2.2/010-BreastMeta-ASLY/t1ce_seg_label2.nii.gz
