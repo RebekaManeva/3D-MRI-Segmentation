@@ -1,0 +1,8 @@
+Image,Mask
+/hdd3/bran/data/SD_glioma/submitted_data/MOTUM-v.2.2/020-LungMeta-CZYY/t1ce.nii.gz,/hdd3/bran/data/SD_glioma/submitted_data/MOTUM-v.2.2/020-LungMeta-CZYY/t1ce_seg_label2.nii.gz
+Image,Mask
+/hdd3/bran/data/SD_glioma/submitted_data/MOTUM-v.2.2/020-LungMeta-CZYY/t2.nii.gz,/hdd3/bran/data/SD_glioma/submitted_data/MOTUM-v.2.2/020-LungMeta-CZYY/flair_seg_label1.nii.gz
+Image,Mask
+/hdd3/bran/data/SD_glioma/submitted_data/MOTUM-v.2.2/020-LungMeta-CZYY/t1ce.nii.gz,/hdd3/bran/data/SD_glioma/submitted_data/MOTUM-v.2.2/020-LungMeta-CZYY/t1ce_seg_label2.nii.gz
+Image,Mask
+/hdd3/bran/data/SD_glioma/submitted_data/MOTUM-v.2.2/020-LungMeta-CZYY/t1ce.nii.gz,/hdd3/bran/data/SD_glioma/submitted_data/MOTUM-v.2.2/020-LungMeta-CZYY/t1ce_seg_label2.nii.gz
